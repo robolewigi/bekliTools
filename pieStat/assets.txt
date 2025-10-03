@@ -1,0 +1,730 @@
+//!findFocus piegraph/barGraph commands trayIconBackground saveTimeAndLog full focusWindow
+//!findFocus
+use std::fs;
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{ConnectionExt, EventMask, PropertyNotifyEvent};
+use x11rb::rust_connection::RustConnection;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+ // Connect to X11
+ let (conn, screen_num) = RustConnection::connect(None)?;
+ let screen = &conn.setup().roots[screen_num];
+
+ // Get the atoms we need
+ let net_active = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?.reply()?.atom;
+ let net_wm_pid = conn.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom;
+ let wm_class = conn.intern_atom(false, b"WM_CLASS")?.reply()?.atom;
+
+ // Subscribe to property change events on the root window
+ conn.change_window_attributes(
+  screen.root,
+  &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+   .event_mask(EventMask::PROPERTY_CHANGE),
+ )?;
+ conn.flush()?;
+
+ println!("Listening for focus changes...");
+ loop {
+  let event = conn.wait_for_event()?;
+
+  if let x11rb::protocol::Event::PropertyNotify(PropertyNotifyEvent { atom, .. }) = event {
+   if atom == net_active {
+    // Get the active window
+    if let Ok(reply) = conn.get_property(
+     false,
+     screen.root,
+     net_active,
+     x11rb::protocol::xproto::AtomEnum::WINDOW,
+     0,
+     1,
+    )?.reply()
+    {
+     if let Some(window) = reply.value32().and_then(|mut v| v.next()) {
+      // --- Try _NET_WM_PID first ---
+      let mut got_name = false;
+      if let Ok(reply) = conn.get_property(
+       false,
+       window,
+       net_wm_pid,
+       x11rb::protocol::xproto::AtomEnum::CARDINAL,
+       0,
+       1,
+      )?.reply()
+      {
+       if let Some(pid) = reply.value32().and_then(|mut v| v.next()) {
+        let exe = format!("/proc/{}/comm", pid);
+        if let Ok(name) = fs::read_to_string(exe) {
+         println!("Now focused: {} (pid {})", name.trim(), pid);
+         got_name = true;
+        }
+       }
+      }
+
+      // --- Fallback: WM_CLASS ---
+      if !got_name {
+       if let Ok(reply) = conn.get_property(
+        false,
+        window,
+        wm_class,
+        x11rb::protocol::xproto::AtomEnum::STRING,
+        0,
+        64,
+       )?.reply()
+       {
+        if !reply.value.is_empty() {
+         // WM_CLASS may contain null bytes → split safely
+         let classes: Vec<&str> = reply
+          .value
+          .split(|&b| b == 0)
+          .filter_map(|s| std::str::from_utf8(s).ok())
+          .collect();
+
+         if !classes.is_empty() {
+          println!("Now focused (WM_CLASS): {}", classes.join(", "));
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}
+
+
+//!pieBarGraph
+use std::f64::consts::TAU;
+
+fn main() {
+    // radius in "rows" (height). Increase to make a bigger circle.
+    let radius: i32 = 12;
+
+    // Aspect compensation: how many character cells across correspond to one vertical cell.
+    // Typical monospace terminals are ~ twice as tall as wide, so x_scale = 2.0 usually makes it round.
+    // Tweak if your font/terminal differs (try 1.8..2.4).
+    let x_scale: f64 = 2.0;
+
+    // Number of color wedges (you can increase for finer color slices)
+    let wedges = 12usize;
+
+    for y in -radius..=radius {
+        // x loops wider to preserve proportions on the console
+        for x in -(radius as f64 * x_scale).round() as i32..=(radius as f64 * x_scale).round() as i32 {
+            // convert to centered coordinates with x scaled back into "square" space
+            let dx = (x as f64) / x_scale;
+            let dy = y as f64;
+
+            if dx * dx + dy * dy <= (radius as f64) * (radius as f64) {
+                // angle in [0, TAU)
+                let mut angle = dy.atan2(dx); // -PI..PI
+                if angle < 0.0 { angle += TAU; }
+
+                // determine wedge index from angle
+                let idx = ((angle / TAU) * wedges as f64).floor() as usize % wedges;
+
+                // pick ANSI color codes (31..36 then repeat). You can customize list.
+                // Using basic 6 colors repeated over wedges.
+                let color_code = match idx % 6 {
+                    0 => 31, // red
+                    1 => 33, // yellow
+                    2 => 32, // green
+                    3 => 36, // cyan
+                    4 => 34, // blue
+                    _ => 35, // magenta
+                };
+
+                // Print colored full block and reset color after it.
+                print!("\x1b[{}m█\x1b[0m", color_code);
+            } else {
+                // outside circle: print space (matching block width)
+                print!(" ");
+            }
+        }
+        println!();
+    }
+}
+
+///////////////////
+
+fn rustBarChart() {
+ let values = vec![("Apples", 5), ("Oranges", 8), ("Bananas", 3)];
+ let colors = ["\x1b[35m", "\x1b[36m", "\x1b[33m"]; // magenta, cyan, yellow
+
+ println!("Bar Chart:");
+ for (i, (label, val)) in values.iter().enumerate() {
+  let bar = "█".repeat(*val as usize);
+  println!("{}{:>8}: {} ({})\x1b[0m", colors[i % colors.len()], label, bar, val);
+ }
+}
+
+//!commands
+use std::io::{self, BufRead};
+fn changeState(state: &mut i32, x: i32) {
+ *state = x;
+ println!("consoleState = {}", state);
+ }
+
+fn main() {
+ let mut consoleState = 0;
+ let helpText: &str = "commandKey- help default graph chart";
+ let stdin = io::stdin();
+ let lines = stdin.lock().lines();
+
+ println!(";help\n{}", helpText);
+
+ for line in lines {
+  if let Ok(cmd) = line {
+   match cmd.trim() {
+    ";help" => println!("{}", helpText),
+    ";default" => changeState(&mut consoleState, 0),
+    ";graph" => changeState(&mut consoleState, 1),
+    ";chart" => changeState(&mut consoleState, 2),
+    _ => println!("wrong command"),
+    }
+   }
+  }
+ }
+
+//!trayIconBackground
+// Copyright 2022-2022 Tauri Programme within The Commons Conservancy
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
+
+use tao::{
+    event::Event,
+    event_loop::{ControlFlow, EventLoopBuilder},
+};
+use tray_icon::{
+    menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    TrayIconBuilder, TrayIconEvent,
+};
+
+enum UserEvent {
+    TrayIconEvent(tray_icon::TrayIconEvent),
+    MenuEvent(tray_icon::menu::MenuEvent),
+}
+
+fn main() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/icon.png");
+
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+
+    // set a tray event handler that forwards the event and wakes up the event loop
+    let proxy = event_loop.create_proxy();
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        proxy.send_event(UserEvent::TrayIconEvent(event));
+    }));
+
+    // set a menu event handler that forwards the event and wakes up the event loop
+    let proxy = event_loop.create_proxy();
+    MenuEvent::set_event_handler(Some(move |event| {
+        proxy.send_event(UserEvent::MenuEvent(event));
+    }));
+
+    let tray_menu = Menu::new();
+
+    let quit_i = MenuItem::new("Quit", true, None);
+    tray_menu.append_items(&[
+        &PredefinedMenuItem::about(
+            None,
+            Some(AboutMetadata {
+                name: Some("tao".to_string()),
+                copyright: Some("Copyright tao".to_string()),
+                ..Default::default()
+            }),
+        ),
+        &PredefinedMenuItem::separator(),
+        &quit_i,
+    ]);
+
+    let mut tray_icon = None;
+
+    let menu_channel = MenuEvent::receiver();
+    let tray_channel = TrayIconEvent::receiver();
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        match event {
+            Event::NewEvents(tao::event::StartCause::Init) => {
+                let icon = load_icon(std::path::Path::new(path));
+
+                // We create the icon once the event loop is actually running
+                // to prevent issues like https://github.com/tauri-apps/tray-icon/issues/90
+                tray_icon = Some(
+                    TrayIconBuilder::new()
+                        .with_menu(Box::new(tray_menu.clone()))
+                        .with_tooltip("tao - awesome windowing lib")
+                        .with_icon(icon)
+                        .build()
+                        .unwrap(),
+                );
+
+                // We have to request a redraw here to have the icon actually show up.
+                // Tao only exposes a redraw method on the Window so we use core-foundation directly.
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    use objc2_core_foundation::{CFRunLoopGetMain, CFRunLoopWakeUp};
+
+                    let rl = CFRunLoopGetMain().unwrap();
+                    CFRunLoopWakeUp(&rl);
+                }
+            }
+
+            Event::UserEvent(UserEvent::TrayIconEvent(event)) => {
+                println!("{event:?}");
+            }
+
+            Event::UserEvent(UserEvent::MenuEvent(event)) => {
+                println!("{event:?}");
+
+                if event.id == quit_i.id() {
+                    tray_icon.take();
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+
+            _ => {}
+        }
+    })
+}
+
+fn load_icon(path: &std::path::Path) -> tray_icon::Icon {
+    let (icon_rgba, icon_width, icon_height) = {
+        let image = image::open(path)
+            .expect("Failed to open icon path")
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        let rgba = image.into_raw();
+        (rgba, width, height)
+    };
+    tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
+}
+
+//!saveTimeAndLog
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::{Duration, Instant};
+
+fn main() {
+ let start = Instant::now();
+
+ loop {
+  let elapsed = start.elapsed().as_secs();
+
+  let mut file = OpenOptions::new()
+   .create(true)
+   .write(true)
+   .truncate(false)
+   .open("timeLog.txt")
+   .expect("Could not open timeLog.txt");
+
+  writeln!(file, "Session running: {} seconds", elapsed).unwrap();
+
+  std::thread::sleep(Duration::from_secs(5));
+ }
+}
+
+//!full
+#![allow(non_snake_case)]
+#![allow(non_upper_case_globals)]
+#![allow(unused_mut)]
+#![allow(dead_code)]
+#![allow(unused_comparisons)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_must_use)]
+use std::f64::consts::TAU;
+use std::fs::{self, OpenOptions};
+use std::io::{self, BufRead, Write};
+use std::time::{Duration, Instant,SystemTime,UNIX_EPOCH};
+use std::process::Command;
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{ConnectionExt, EventMask, PropertyNotifyEvent};
+use x11rb::rust_connection::RustConnection;
+use std::sync::{Arc, Mutex};
+use tao::{
+ event::Event,
+ event_loop::{ControlFlow, EventLoopBuilder},
+ };
+use tray_icon::{
+ menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem},TrayIconBuilder, TrayIconEvent,
+ };
+enum UserEvent {
+ TrayIconEvent(tray_icon::TrayIconEvent),
+ MenuEvent(tray_icon::menu::MenuEvent),
+ }
+
+static helpText: &str = "commandKey- 'help' '24h' 'all' 'setTime (secs)' 'clear'\n(barGraph) █= 30 minutes";
+
+fn convertTime(secs: u64, level: u8) -> u64 {
+ let mut time = secs;
+ if level >= 0 {
+  time = time / 60; // minutes
+  }
+ if level >= 1 {
+  time = time / 60; // hours
+  }
+ if level >= 2 {
+  time = time / 24; // days
+  }
+ if level >= 3 {
+  time = time / 365; // leap years
+  }
+ time
+ }
+fn reopen_in_terminal() {
+    use std::process::Command;
+
+    let current_exe = std::env::current_exe().expect("Failed to get current exe");
+
+    eprintln!("Reopening in terminal: {}", current_exe.display());
+
+    let terminals = [
+        ("xdg-terminal-exec", vec![]),
+        ("gnome-terminal", vec!["--"]),
+        ("konsole", vec!["-e"]),
+        ("xterm", vec!["-e"]),
+        ("lxterminal", vec!["-e"]),
+    ];
+
+    for (term, arg) in terminals {
+        let result = Command::new(term)
+            .args(arg)
+            .arg(&current_exe)
+            .spawn();
+
+        if result.is_ok() {
+            eprintln!("Launched with {}", term);
+            return;
+        }
+    }
+
+    eprintln!("No supported terminal found!");
+}
+
+fn logTime(){
+ let start = Instant::now();
+ loop {
+  let elapsed = start.elapsed().as_secs();
+  let mut file = OpenOptions::new()
+   .create(true)
+   .append(true)
+   .open("save.txt")
+   .expect("Could not open save.txt");
+  writeln!(file, "Session running: {} seconds", elapsed).unwrap();
+
+  std::thread::sleep(Duration::from_secs(10));
+  }
+ }
+
+
+fn refreshFunc(x: u32){
+ if x==0{
+  barGraph();
+  }
+ if x==1{
+  pieGraph(0);
+  }
+ }
+
+fn barGraph() {
+ let values = vec![("Apples", 5), ("Oranges", 8), ("Bananas", 3)];
+ let colors = ["\x1b[35m", "\x1b[36m", "\x1b[33m"]; // magenta, cyan, yellow
+  let secs = SystemTime::now() .duration_since(UNIX_EPOCH) .expect("Time went backwards").as_secs();
+
+ println!("{:?}", convertTime(secs,3));
+ for (i, (label, val)) in values.iter().enumerate() {
+  let bar = "█".repeat(*val as usize);
+  println!("{}{:>8}: {} ({})\x1b[0m", colors[i % colors.len()], label, bar, val);
+  }
+ println!("{}={}min","key",20);
+ }
+
+fn clear() {
+ print!("\x1B[2J\x1B[H");
+ io::stdout().flush().unwrap();
+ }
+
+fn pieGraph(totalTime: u64){
+ println!("Total Time: {}",0);
+ let radius: i32 = 4;
+ let wedges = 7usize;
+ let x_scale: f64 = 2.0;
+ for y in -radius..=radius {
+  for x in -(radius as f64 * x_scale).round() as i32..=(radius as f64 * x_scale).round() as i32 {
+   let dx = (x as f64) / x_scale;
+   let dy = y as f64;
+   if dx * dx + dy * dy <= (radius as f64) * (radius as f64) {
+    let mut angle = dy.atan2(dx); // -PI..PI
+    if angle < 0.0 { angle += TAU; }
+    let idx = ((angle / TAU) * wedges as f64).floor() as usize % wedges;
+    let color_code = match idx % 6 {
+     0 => 31, // red
+     1 => 33, // yellow
+     2 => 32, // green
+     3 => 36, // cyan
+     4 => 34, // blue
+     _ => 35, // magenta
+     };
+    print!("\x1b[{}m█\x1b[0m", color_code);
+    } else {
+    print!(" ");
+    }
+   }
+  println!();
+  }
+ }
+
+fn loadIcon(path: &std::path::Path) -> tray_icon::Icon {
+    let (icon_rgba, icon_width, icon_height) = {
+        let image = image::open(path)
+            .expect("Failed to open icon path")
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        let rgba = image.into_raw();
+        (rgba, width, height)
+    };
+    tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
+}
+
+fn trayIcon(){
+     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/icon.png");
+
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+
+    // set a tray event handler that forwards the event and wakes up the event loop
+    let proxy = event_loop.create_proxy();
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        proxy.send_event(UserEvent::TrayIconEvent(event));
+    }));
+
+    // set a menu event handler that forwards the event and wakes up the event loop
+    let proxy = event_loop.create_proxy();
+    MenuEvent::set_event_handler(Some(move |event| {
+        proxy.send_event(UserEvent::MenuEvent(event));
+    }));
+
+    let tray_menu = Menu::new();
+    let open_i = MenuItem::new("Open", true, None);
+    let quit_i = MenuItem::new("Quit", true, None);
+    tray_menu.append_items(&[
+        &open_i,
+        &PredefinedMenuItem::separator(),
+        &quit_i,
+    ]);
+    let mut tray_icon = None;
+
+    let menu_channel = MenuEvent::receiver();
+    let tray_channel = TrayIconEvent::receiver();
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+
+        match event {
+            Event::NewEvents(tao::event::StartCause::Init) => {
+                let icon = loadIcon(std::path::Path::new(path));
+
+                // We create the icon once the event loop is actually running
+                // to prevent issues like https://github.com/tauri-apps/tray-icon/issues/90
+                tray_icon = Some(
+                    TrayIconBuilder::new()
+                        .with_menu(Box::new(tray_menu.clone()))
+                        .with_tooltip("tao - awesome windowing lib")
+                        .with_icon(icon)
+                        .build()
+                        .unwrap(),
+                );
+
+                // We have to request a redraw here to have the icon actually show up.
+                // Tao only exposes a redraw method on the Window so we use core-foundation directly.
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    use objc2_core_foundation::{CFRunLoopGetMain, CFRunLoopWakeUp};
+
+                    let rl = CFRunLoopGetMain().unwrap();
+                    CFRunLoopWakeUp(&rl);
+                }
+            }
+
+            Event::UserEvent(UserEvent::TrayIconEvent(event)) => {
+                println!("{event:?}");
+            }
+
+  Event::UserEvent(UserEvent::MenuEvent(event)) => {
+   if event.id == open_i.id() {
+    reopen_in_terminal();
+    std::process::exit(0);
+    }
+   else if event.id == quit_i.id() {
+    tray_icon.take();
+    *control_flow = ControlFlow::Exit;
+    }else if event.id == open_i.id() {
+    use std::process::Command;
+    let _ = Command::new("xterm")
+    .arg("-e")
+    .arg("bash -c 'echo Hello from tray!; exec bash'")
+    .spawn();
+   }
+  }
+
+            _ => {}
+        }
+    })
+ }
+
+fn focusWindow() -> Result<(), Box<dyn std::error::Error>> {
+ let (conn, screen_num) = RustConnection::connect(None)?;
+ let screen = &conn.setup().roots[screen_num];
+ let net_active = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?.reply()?.atom;
+ let net_wm_pid = conn.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom;
+ let wm_class = conn.intern_atom(false, b"WM_CLASS")?.reply()?.atom;
+ conn.change_window_attributes(
+  screen.root, &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+   .event_mask(EventMask::PROPERTY_CHANGE),)?;
+ conn.flush()?;
+ loop {
+  let event = conn.wait_for_event()?;
+  if let x11rb::protocol::Event::PropertyNotify(PropertyNotifyEvent { 
+   atom, .. }) = event {
+    if atom == net_active {
+     if let Ok(reply) = conn.get_property(
+     false,screen.root,net_active,
+     x11rb::protocol::xproto::AtomEnum::WINDOW,0,1,
+     )?.reply(){
+      if let Some(window) = reply.value32().and_then(|mut v| v.next()) {
+       let mut got_name = false;
+       if let Ok(reply) = conn.get_property(
+        false,window,net_wm_pid,
+        x11rb::protocol::xproto::AtomEnum::CARDINAL,0,1,
+        )?.reply(){
+        if let Some(pid) = reply.value32().and_then(|mut v| v.next()) {
+         let exe = format!("/proc/{}/comm", pid);
+         if let Ok(name) = fs::read_to_string(exe) {
+          got_name = true;
+          }
+         }
+        }
+       if !got_name {
+        if let Ok(reply) = conn.get_property(
+        false,window,wm_class,
+        x11rb::protocol::xproto::AtomEnum::STRING,0,64,
+        )?.reply(){
+        if !reply.value.is_empty() {
+         let classes: Vec<&str> = reply
+          .value.split(|&b| b == 0)
+          .filter_map(|s| std::str::from_utf8(s).ok()).collect();
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+
+fn commands(setTime: Arc<Mutex<u64>>){
+ let stdin = io::stdin();
+ let lines = stdin.lock().lines();
+ let secs=*setTime.lock().unwrap();
+
+ for line in lines {
+  if let Ok(cmd) = line {
+   let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+   match parts.as_slice() {
+    [";help"] => println!("{}\nsetTime={}", helpText,secs),
+    [";all"] => refreshFunc(1),
+    [";24h"] => refreshFunc(0),
+    [";clear"] =>  clear(),
+    [";setTime", num] => {
+     if let Ok(new_rate) = num.parse::<u64>() {
+      *setTime.lock().unwrap() = new_rate;
+       println!("timerUpdated: {}", new_rate);
+      }else{
+      println!("did not work");
+      }
+     },
+    _ => println!("unknown command: {}", cmd.trim()),
+    }
+   }
+  }
+ }
+
+fn main() {
+ let mut totalTime=0;
+ let setTimer= Arc::new(Mutex::new(60));
+ let setTimerClone = std::sync::Arc::clone(&setTimer);
+ let setTimerClone2 = std::sync::Arc::clone(&setTimer);
+ std::thread::spawn(|| {
+  if let Err(e) = focusWindow() {
+   eprintln!("focusWindow error: {}", e);
+   }
+  });
+ std::thread::spawn(move || {
+  loop {
+   let secs= *setTimerClone.lock().unwrap();
+   std::thread::sleep(Duration::from_secs(secs));
+   }
+ });
+ std::thread::spawn(move || {commands(setTimerClone2);});
+ std::thread::spawn(|| logTime());
+ println!(";help\n{}", helpText);
+ println!(";24h");
+ refreshFunc(0);
+
+ trayIcon();
+ }
+
+//!focusWindow
+fn focusWindow() -> Result<(), Box<dyn std::error::Error>> {
+ let (conn, screen_num) = RustConnection::connect(None)?;
+ let screen = &conn.setup().roots[screen_num];
+ let net_active = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?.reply()?.atom;
+ let net_wm_pid = conn.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom;
+ let wm_class = conn.intern_atom(false, b"WM_CLASS")?.reply()?.atom;
+ conn.change_window_attributes(
+  screen.root, &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+   .event_mask(EventMask::PROPERTY_CHANGE),)?;
+ conn.flush()?;
+ loop {
+  let event = conn.wait_for_event()?;
+  if let x11rb::protocol::Event::PropertyNotify(PropertyNotifyEvent { 
+   atom, .. }) = event {
+    if atom == net_active {
+     if let Ok(reply) = conn.get_property(
+     false,screen.root,net_active,
+     x11rb::protocol::xproto::AtomEnum::WINDOW,0,1,
+     )?.reply(){
+      if let Some(window) = reply.value32().and_then(|mut v| v.next()) {
+       let mut got_name = false;
+       if let Ok(reply) = conn.get_property(
+        false,window,net_wm_pid,
+        x11rb::protocol::xproto::AtomEnum::CARDINAL,0,1,
+        )?.reply(){
+        if let Some(pid) = reply.value32().and_then(|mut v| v.next()) {
+         let exe = format!("/proc/{}/comm", pid);
+         if let Ok(name) = fs::read_to_string(exe) {
+          got_name = true;
+          }
+         }
+        }
+       if !got_name {
+        if let Ok(reply) = conn.get_property(
+        false,window,wm_class,
+        x11rb::protocol::xproto::AtomEnum::STRING,0,64,
+        )?.reply(){
+        if !reply.value.is_empty() {
+         let classes: Vec<&str> = reply
+          .value.split(|&b| b == 0)
+          .filter_map(|s| std::str::from_utf8(s).ok()).collect();
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }

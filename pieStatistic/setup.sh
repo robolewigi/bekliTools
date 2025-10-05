@@ -9,11 +9,12 @@ sudo apt update
 sudo apt install libgtk-3-0 libxdo3
 sudo apt install libayatana-appindicator3-1
 
-read -p "create .desktop file at $DIR"
+read -p "create .desktop file at $DIR (gnome only)"
 
-cat > ~/.local/share/applications/piestatistic.desktop <<EOF
+cat > ~/.local/share/applications/pieStatistic.desktop <<EOF
 [Desktop Entry]
-Name=$DIR/pieStatistic
+Name=pieStatistic
+Exec=gnome-terminal -- bash -c '$DIR/pieStatistic; exec bash'
 Icon=$DIR/icon.png
 Type=Application
 Terminal=true
@@ -21,5 +22,5 @@ Categories=Utility;
 EOF
 
 
-chmod +x ~/.local/share/applications/piestatistic.desktop
+chmod +x ~/.local/share/applications/pieStatistic.desktop
 update-desktop-database ~/.local/share/applications

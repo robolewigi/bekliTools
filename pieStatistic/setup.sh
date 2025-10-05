@@ -7,6 +7,7 @@ read -p "installing libraries"
 
 sudo apt update
 sudo apt install libgtk-3-0 libxdo3
+sudo apt install libayatana-appindicator3-1
 
 read -p "create .desktop file at $DIR"
 

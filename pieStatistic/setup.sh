@@ -24,3 +24,5 @@ EOF
 
 chmod +x ~/.local/share/applications/pieStatistic.desktop
 update-desktop-database ~/.local/share/applications
+
+read -p "done"

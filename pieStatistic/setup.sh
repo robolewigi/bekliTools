@@ -14,12 +14,13 @@ read -p "create .desktop file at $DIR"
 cat > ~/.local/share/applications/piestatistic.desktop <<EOF
 [Desktop Entry]
 Name=pieStatistic
-Exec=$DIR/pieStatistic
-Icon=$DIR/icon.png
+Exec=sh -c 'cd "$DIR/pieStatistic" && ./pieStatistic'
+Icon=$DIR/pieStatistic/icon.png
 Type=Application
 Terminal=true
 Categories=Utility;
 EOF
+
 
 chmod +x ~/.local/share/applications/piestatistic.desktop
 update-desktop-database ~/.local/share/applications

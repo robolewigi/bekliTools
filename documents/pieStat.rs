@@ -390,11 +390,9 @@ fn loadIcon(path: &std::path::Path) -> tray_icon::Icon {
  }
 
 fn trayIcon(){
- let path = concat!(env!("CARGO_MANIFEST_DIR"), "/icon.png");
- let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
- tray_icon::TrayIconEvent::set_event_handler(Some(move |_event| {}));
-
- let proxy = event_loop.create_proxy();
+ let eventLoop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+ tray_icon::TrayIconEvent:: set_event_handler(Some(move |_event| {}));
+ let proxy = eventLoop.create_proxy();
  MenuEvent::set_event_handler(Some(move |event| {
  let _ = proxy.send_event(UserEvent::MenuEvent(event));
  }));
@@ -403,11 +401,11 @@ fn trayIcon(){
  let quit_i = MenuItem::new("Quit", true, None);
  let _ = tray_menu.append_items(&[&open_i,&PredefinedMenuItem::separator(), &quit_i,]);
  let mut tray_icon = None;
- event_loop.run(move |event, _, control_flow| {
+ eventLoop.run(move |event, _, control_flow| {
   *control_flow = ControlFlow::Wait;
   match event {
    Event::NewEvents(tao::event::StartCause::Init) => {
-    let icon = loadIcon(std::path::Path::new(path));
+    let icon = loadIcon(std::path::Path::new("icon.png"));
     tray_icon = Some(TrayIconBuilder::new()
      .with_menu(Box::new(tray_menu.clone())). with_tooltip("tao - awesome windowing lib"). with_icon(icon).build().unwrap(),);
     }

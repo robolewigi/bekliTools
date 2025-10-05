@@ -1,1 +1,1 @@
-/home/adam/app/export/bekliTools/pieStat/target/release/pieStatistic: /home/adam/app/export/bekliTools/pieStat/src/main.rs
+/home/adam/app/export/pieStat/target/release/pieStatistic: /home/adam/app/export/pieStat/src/main.rs

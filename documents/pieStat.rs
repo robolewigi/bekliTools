@@ -406,8 +406,7 @@ fn trayIcon(){
   match event {
    Event::NewEvents(tao::event::StartCause::Init) => {
     let icon = loadIcon(std::path::Path::new("icon.png"));
-    tray_icon = Some(TrayIconBuilder::new()
-     .with_menu(Box::new(tray_menu.clone())). with_tooltip("tao - awesome windowing lib"). with_icon(icon).build().unwrap(),);
+    tray_icon = Some(TrayIconBuilder::new(). with_menu(Box::new(tray_menu.clone())). with_tooltip("tao - awesome windowing lib"). with_icon(icon.clone()). build(). unwrap());
     }
    Event::UserEvent(UserEvent::MenuEvent(event)) => {
     if event.id == open_i.id() {

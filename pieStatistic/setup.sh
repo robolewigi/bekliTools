@@ -15,6 +15,7 @@ cat > ~/.local/share/applications/pieStatistic.desktop <<EOF
 [Desktop Entry]
 Name=pieStatistic
 Exec=gnome-terminal -- bash -c '$DIR/pieStatistic; exec bash'
+Path=$DIR
 Icon=$DIR/icon.png
 Type=Application
 Terminal=true

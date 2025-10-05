@@ -13,9 +13,8 @@ read -p "create .desktop file at $DIR"
 
 cat > ~/.local/share/applications/piestatistic.desktop <<EOF
 [Desktop Entry]
-Name=pieStatistic
-Exec=sh -c 'cd "$DIR/pieStatistic" && ./pieStatistic'
-Icon=$DIR/pieStatistic/icon.png
+Name=$DIR/pieStatistic
+Icon=$DIR/icon.png
 Type=Application
 Terminal=true
 Categories=Utility;

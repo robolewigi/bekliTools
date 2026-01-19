@@ -1,0 +1,9 @@
+wheelWidth=40
+wheelHeight=24
+wheelMax=6
+lineLength=6
+radius=5
+centerX=20
+centerY=12
+keyMap=A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,0,1,2,3,4,5,6,7,8,9,Plus,Minus,Asterisk,Slash,Semicolon,Comma,Period,Percent,Quote,ParenLeft,ParenRight,BraceLeft,BraceRight,BracketLeft,BracketRight,Tab,BackSpace,Escape,Return,Space,Left,Right,Up,Down,PageUp,PageDown
+keySymbols=A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,0,1,2,3,4,5,6,7,8,9,+,-,*,/,;,,,.,%,",(,),{,},[,],↹,⌫,⎋,⏎,␣,←,→,↑,↓,⇞,⇟

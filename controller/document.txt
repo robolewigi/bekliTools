@@ -1,0 +1,1116 @@
+#!todo
+-add a fast wheel like 4 directions for hat or joystick button
+-switch fast wheel using middle buttons
+-add controller inputs switch
+-profiles:
+=using y button at certain area left button press another area
+=a command you can create the area and directions for it
+=help=command1 to location of cursor then command2 for extension of it
+command3 is location of mouse and command 4 would be the button presses
+-uniform speed even in top-left bottom-right
+-make space easier access
+-make commands like help shows commands
+-make it cleaner do not show button press
+
+
+#!v1 2025 aug25
+#include <SDL2/SDL.h>
+#include <iostream>
+#include <vector>
+
+#include <cstdlib>
+#include <string>
+
+#ifdef __linux__
+ #include <X11/Xlib.h>
+ #include <X11/extensions/XTest.h>
+ #include <X11/keysym.h>
+ #include <X11/keysymdef.h>
+#elif _WIN32
+ #include <Windows.h>
+ #endif
+
+//!resources//
+SDL_Event event;
+bool running = true;
+int screenX = 0, screenY = 0;
+float maxFrames = 60.0f;
+Uint64 frameStartTicks,frameEndTicks,elapsedTicks = 0,TICKS_PER_FRAME,TICKS_PER_SECOND;
+//(controller)
+int deadzone = 4000, leftTrigger = 0, rightTrigger = 0, leftY = 0, leftX = 0, rightY = 0, rightX = 0, hatState = 0;
+SDL_Joystick* joystick1 = nullptr;
+int numJoysticks = 0;
+SDL_GameController* controller1 = nullptr;
+int rightShoulderTime=0;
+//(graphics)
+int wheelWidth=40,wheelHeight=24;
+int wheelMax=6,lineLength=6;
+float radius=5.0f, centerX=wheelWidth/2.0f, centerY=wheelHeight/2.0f;
+std::vector<std::vector<char>> grid(wheelHeight, std::vector<char>(wheelWidth, ' '));
+std::string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+//(conTab)
+int conTabSelect=-1,conTabSelectSave=-1;
+int autoKey=0;
+bool keyboardSwitch=false;
+
+//!scroll//
+int scrollProgress=-1;
+
+//!simulate//
+#ifdef __linux__
+ void simulateMouseClick(unsigned int button, bool press = true) {
+  Display *display = XOpenDisplay(NULL);
+  if (display == NULL) {
+   std::cerr << "Failed to open X display" << std::endl;
+   return;
+  }
+  if (press) {
+   XTestFakeButtonEvent(display, button, True, 0);
+  } else {
+   XTestFakeButtonEvent(display, button, False, 0);
+  }
+  XFlush(display);
+  XCloseDisplay(display);
+ } 
+ void simulateScroll(int direction) {
+  Display *display = XOpenDisplay(NULL);
+  if (display == NULL) {return;}
+  unsigned int button = (direction > 0) ? 4 : 5;
+  XTestFakeButtonEvent(display, button, True, 0);
+  XTestFakeButtonEvent(display, button, False, 0);
+  XFlush(display);
+  XCloseDisplay(display);
+  }
+ void simulateKeyPress(KeySym keysym, bool press = true) {
+  Display *display = XOpenDisplay(NULL);
+  if (display == NULL) {return;}
+  KeyCode keycode = XKeysymToKeycode(display, keysym);
+  if (keycode == 0) {
+   std::cerr << "Failed to convert keysym to keycode" << std::endl;
+   XCloseDisplay(display);
+   return;
+   } 
+  XTestFakeKeyEvent(display, keycode, press ? True : False, 0);
+  XFlush(display);
+  XCloseDisplay(display);
+  }
+ 
+#elif _WIN32
+ void simulateMouseClick(int button, bool press = true) {
+  INPUT input = { 0 }; // Create an INPUT structure to hold event data
+  input.type = INPUT_MOUSE; // We're simulating a mouse event
+  if (button == 1 ) {
+   input.mi.dwFlags = press ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+   } else if (button == 3){
+   input.mi.dwFlags = press ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+   } else if (button == 2) {
+   input.mi.dwFlags = press ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+   }
+  SendInput(1, &input, sizeof(INPUT));
+  }
+ #endif
+
+void pressChar(char c) {
+ char str[2] = {c, '\0'};
+ KeySym keySym = XStringToKeysym(str);
+ if (keySym != NoSymbol) {
+  simulateKeyPress(keySym, true);
+  simulateKeyPress(keySym, false);
+  }
+ }
+
+
+//!graphics//
+void graphicsWheel(std::string newLetters=letters,int max=6){
+ system("clear");
+ std::cout<<"hatLeft/Right=+/- hatUp/Down=wheelUp/Down\nleftButton=backspace rightButton=escape centerButton=return leftShoulder=tab\ndoubleRightShoulder=mouseToJoystick leftTrigger=loopKeyPress\nrightTrigger=slowCursorSpeed\njoystickMouse is "<<keyboardSwitch;
+ lineLength=max;
+ for (int y = 0; y < wheelHeight; y++) {
+  for (int x = 0; x < wheelWidth; x++) {
+   grid[y][x] = ' ';
+   }
+  }
+ int currentLetterIndex = 0;
+ int totalLettersNeeded = wheelMax * lineLength;
+ for (int i = 0; i < wheelMax; i++) {
+  double angle = 2.0 * M_PI * i / wheelMax;
+  for (int j = 0; j < lineLength; j++) {
+   float currentLineRadius = radius + (j * 1.5f); 
+   float tempX = centerX + currentLineRadius * cos(angle);
+   float tempY = centerY + currentLineRadius * sin(angle);
+   int lineX = static_cast<int>(std::round(tempX)); 
+   int lineY = static_cast<int>(std::round(tempY));
+   if (currentLetterIndex < newLetters.length() && lineX >= 0 && lineX < wheelWidth && lineY >= 0 && lineY < wheelHeight) {
+    grid[lineY][lineX] = newLetters[currentLetterIndex];
+    }
+   currentLetterIndex++;
+   }
+  }
+ for (int y = 0; y < wheelHeight; y++) {
+  for (int x = 0; x < wheelWidth; x++) {
+   std::cout << grid[y][x];
+   }
+  std::cout << std::endl;
+  }
+ }
+
+void graphicsBegin(){
+ graphicsWheel(letters);
+ }
+
+//!window//
+void init(){
+ TICKS_PER_SECOND = SDL_GetPerformanceFrequency();
+ TICKS_PER_FRAME = TICKS_PER_SECOND / static_cast<Uint64>(maxFrames);
+ }
+
+void update(){
+ frameEndTicks = SDL_GetPerformanceCounter();
+ elapsedTicks = frameEndTicks - frameStartTicks;
+ if (elapsedTicks < TICKS_PER_FRAME) {
+  Uint64 remainingTicks = TICKS_PER_FRAME - elapsedTicks;
+  Uint32 delayMs = (Uint32)(((double)remainingTicks / TICKS_PER_SECOND) * 1000.0);
+  if (delayMs > 0) { 
+   SDL_Delay(delayMs);
+   }
+  }
+ frameStartTicks = SDL_GetPerformanceCounter();
+ }
+
+//!conTab//
+void wheelMove(int x,int y,bool exec){
+ if (std::abs(x)>deadzone|| std::abs(y)>deadzone){
+  double angleRadians = atan2(y, x);
+  double angleDegrees = angleRadians * 180.0 / M_PI;
+  if (angleDegrees < 0) {
+   angleDegrees += 360.0;
+   }
+  angleDegrees+= 30.0;
+  if (angleDegrees >= 360.0) {
+   angleDegrees -= 360.0;
+   }
+  if(keyboardSwitch){
+   if(exec){conTabSelect= static_cast<int>(angleDegrees/360*6);}else{conTabSelectSave= static_cast<int>(angleDegrees/360*6);}
+   }else{conTabSelect= static_cast<int>(angleDegrees/360*6);}
+  if(conTabSelectSave!=-1 && conTabSelect!=-1&& exec){
+   if (autoKey>13000){
+    pressChar(letters[conTabSelectSave*6+ conTabSelect]);
+    autoKey=0;
+    }else{
+    autoKey+=leftTrigger;
+    }
+   }
+  }else {
+  if(exec&& conTabSelect!=-1){
+   pressChar(letters[conTabSelectSave*6+ conTabSelect]);
+   if(!keyboardSwitch){graphicsWheel();}
+   conTabSelect=-1;conTabSelectSave=-1;
+   }else if(conTabSelect!=-1&& !keyboardSwitch){
+   std::string thisLetters = "";
+   for(int i=0;i<wheelMax;i++){
+    thisLetters += letters[conTabSelect*6+i];
+    }
+   graphicsWheel(thisLetters,1); 
+   conTabSelectSave=conTabSelect;
+   conTabSelect=-1;
+   }
+  }
+ }
+
+//!controller//
+void mouseMove(int x, int y){
+ if (joystick1 == nullptr) return;
+ if (std::abs(x) > deadzone || std::abs(y) > deadzone) {
+  if (rightTrigger > 0 && 10000.0f/rightTrigger < 1.0f){
+   x = x * 10000.0f / (rightTrigger*1.7f);
+   y = y * 10000.0f / (rightTrigger*1.7f);
+   }
+  float sensitivity = 0.024f; 
+  float normalizedX = static_cast<float>(x) / 32767.0f;
+  float normalizedY = static_cast<float>(y) / 32767.0f;
+  int newMouseX = static_cast<int>(normalizedX * sensitivity * 1000);
+  int newMouseY = static_cast<int>(normalizedY * sensitivity * 1000 );
+  SDL_WarpMouseGlobal(screenX + newMouseX, screenY + newMouseY); 
+  }
+ }
+
+static void scroll(int scrollAmount) {
+ SDL_Event wheelEvent;
+ wheelEvent.type = SDL_MOUSEWHEEL;
+ wheelEvent.wheel.timestamp = SDL_GetTicks();
+ wheelEvent.wheel.windowID = 0;
+ wheelEvent.wheel.which = 0;
+ wheelEvent.wheel.x = 0;
+ wheelEvent.wheel.y = scrollAmount;
+ wheelEvent.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+ SDL_PushEvent(&wheelEvent);
+ }
+
+struct controllerStr{
+ //0-1:lAnalog 2-3:rAnalog 4-7:rBut 8-9:lrSho 10-11:lrTrig  12-13:mBut 14-15:xyHat
+ std::vector <int> order;
+ int active[16] = {0};
+ int inputs[16] = {0};
+
+ void event(SDL_Event e){
+  if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+   if (e.cbutton.button == SDL_CONTROLLER_BUTTON_A) {
+    inputs[4] = deadzone * 8;
+    active[4] = true;
+    }
+   }
+  if (e.type == SDL_CONTROLLERAXISMOTION) {
+   if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) {
+    if (joystick1 != nullptr) {
+     inputs[0] = SDL_JoystickGetAxis(joystick1, 0);
+     active[0] = (deadzone < inputs[0]) ? true : false;
+    }
+    }
+   }
+  }
+ void swap(){
+  }
+ };
+controllerStr controllerStr1;
+
+int controllerInit(){
+ if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
+  std::cerr << "SDL_Init Error: " << SDL_GetError() << std::endl;
+  return 1;
+  }
+ numJoysticks = SDL_NumJoysticks();
+ if (numJoysticks > 0) {
+  joystick1 = SDL_JoystickOpen(0);
+  if (joystick1 == nullptr) {
+   std::cerr << "Failed to open joystick: " << SDL_GetError() << std::endl;
+   }
+  controller1 = SDL_GameControllerOpen(0);
+  if (controller1 == nullptr) {
+   std::cerr << "Failed to open game controller: " << SDL_GetError() << std::endl;
+   }
+  } else {
+  std::cout << "No joysticks detected" << std::endl;
+  }
+ return 0;
+ }
+
+void controllerEvent(SDL_Event e){
+ switch(e.type){
+  case SDL_JOYDEVICEADDED:
+   if (joystick1 == nullptr) {
+    joystick1 = SDL_JoystickOpen(e.jdevice.which);
+   }
+   break;
+  case SDL_JOYDEVICEREMOVED: 
+   if (joystick1 != nullptr) {
+    SDL_JoystickClose(joystick1);
+    joystick1 = nullptr;
+   }
+   break;
+  case SDL_CONTROLLERDEVICEADDED: 
+   if (controller1 == nullptr) {
+    controller1 = SDL_GameControllerOpen(e.cdevice.which);
+   }
+   break;
+  case SDL_CONTROLLERDEVICEREMOVED: 
+   if (controller1 != nullptr) {
+    SDL_GameControllerClose(controller1);
+    controller1 = nullptr;
+   }
+   break;
+  case SDL_JOYBUTTONDOWN:
+   //std::cout << "Button " << static_cast<int>(event.jbutton.button) << " pressed." << std::endl;
+   if (joystick1 == nullptr) break;
+   switch (e.jbutton.button) {
+    case 0: // bottom button
+     simulateMouseClick(3);
+     break;
+    case 1: // Right button
+     simulateMouseClick(2);
+     break;
+    case 2: // L button
+     simulateMouseClick(1);
+     break;
+    case 4:
+     simulateKeyPress(XK_Tab, true);
+     break;
+    case 6:
+     simulateKeyPress(XK_BackSpace, true);  
+     break;  
+    case 7:
+     simulateKeyPress(XK_Escape, true);  
+     break; 
+    case 8:
+     simulateKeyPress(XK_Return, true);  
+     break; 
+    }
+   break;
+  case SDL_JOYBUTTONUP:
+   if (joystick1 == nullptr) break;
+   switch (e.jbutton.button) {
+    case 0: // bottom button
+     simulateMouseClick(3, false);
+     break;
+    case 1: // Right button
+     simulateMouseClick(2, false);
+     break;
+    case 2: // L button
+     simulateMouseClick(1, false);
+     break;
+    case 4:
+     simulateKeyPress(XK_Tab, false);  
+     break;
+    case 5:
+     if(rightShoulderTime>0){
+      keyboardSwitch=!keyboardSwitch;
+      conTabSelect=-1;conTabSelectSave=-1;
+      graphicsWheel();
+      }else{
+      rightShoulderTime+=1;
+      }
+     break;
+    case 6:
+     simulateKeyPress(XK_BackSpace, false);  
+     break;
+    case 7:
+     simulateKeyPress(XK_Escape, false);  
+     break;  
+    case 8:
+     simulateKeyPress(XK_Return, false);  
+     break; 
+    }
+   break;
+  case SDL_JOYAXISMOTION:
+   if (joystick1 == nullptr || controller1 == nullptr){break;}
+   rightX = SDL_JoystickGetAxis(joystick1, 3);
+   rightY = SDL_JoystickGetAxis(joystick1, 4);
+   leftX = SDL_JoystickGetAxis(joystick1, 0);
+   leftY = SDL_JoystickGetAxis(joystick1, 1);
+   switch (e.jaxis.axis) {
+    case 2:
+     leftTrigger = SDL_GameControllerGetAxis(controller1, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+     break;
+    case 5:
+     rightTrigger = SDL_GameControllerGetAxis(controller1, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+     break;
+    }
+   if(keyboardSwitch){
+    if (std::abs(leftX)<deadzone&& std::abs(leftY)<deadzone){
+     conTabSelect=-1,conTabSelectSave=-1;
+     }else{
+      wheelMove(leftX,leftY,false);
+     if(conTabSelectSave==-1){}else{
+      wheelMove(rightX,rightY,true);}
+     }
+    }
+   break;
+  case SDL_JOYHATMOTION:
+   hatState = e.jhat.value;
+   if(hatState == SDL_HAT_UP){controllerStr1.inputs[15]=1;controllerStr1.inputs[14]=0;}
+    else if(hatState == SDL_HAT_DOWN){controllerStr1.inputs[15]=-1;controllerStr1.inputs[14]=0;}
+    else if(hatState == SDL_HAT_RIGHT){controllerStr1.inputs[14]=1;controllerStr1.inputs[15]=0;}
+   if(hatState == SDL_HAT_LEFT){controllerStr1.inputs[14]=-1;controllerStr1.inputs[15]=0;}
+    else if(hatState == SDL_HAT_LEFTDOWN){
+    controllerStr1.inputs[14]=-1;
+    controllerStr1.inputs[15]=-1;}
+    else if(hatState == SDL_HAT_RIGHTDOWN){controllerStr1.inputs[14]=1;
+controllerStr1.inputs[15]=-1;}
+    else if(hatState == SDL_HAT_LEFTUP){controllerStr1.inputs[14]=-1; controllerStr1.inputs[15]=1;}
+    else if(hatState == SDL_HAT_RIGHTUP){controllerStr1.inputs[14]=1; controllerStr1.inputs[15]=1;}
+   if(hatState==0){
+    controllerStr1.inputs[14]=0;
+    controllerStr1.inputs[15]=0;
+    }
+   if(!keyboardSwitch){
+    static Uint8 prevHatState = 0;
+    if (hatState == prevHatState) {break;}
+    if (prevHatState == SDL_HAT_RIGHT) {
+     simulateKeyPress(XK_KP_Add, false);
+     }else if (prevHatState == SDL_HAT_LEFT) {
+     simulateKeyPress(XK_KP_Subtract, false);
+     }else if (prevHatState == SDL_HAT_LEFTDOWN) {
+     simulateKeyPress(XK_Alt_L, false);
+     }else if (prevHatState == SDL_HAT_RIGHTDOWN) {
+     simulateKeyPress(XK_Shift_L, false);
+     }
+    if(controllerStr1.inputs[14]==1){
+     simulateKeyPress(XK_KP_Add, true);
+     }
+    else if(controllerStr1.inputs[14]==-1){
+     simulateKeyPress(XK_KP_Subtract, true);
+     }
+    prevHatState = hatState;
+    }
+   break;
+  }
+ }
+
+void controllerUpdate(){
+ if (joystick1 == nullptr || !SDL_JoystickGetAttached(joystick1)){
+  if (SDL_NumJoysticks() > 0) {
+   joystick1 = SDL_JoystickOpen(0);
+   }
+  return;
+  }
+ SDL_GetGlobalMouseState(&screenX, &screenY);
+ if(!keyboardSwitch){
+  mouseMove(leftX,leftY);
+  wheelMove(rightX, rightY,conTabSelectSave!=-1&& conTabSelect!=-1);
+  }
+ if (controllerStr1.inputs[14]==0&& !keyboardSwitch) { 
+  if (controllerStr1.inputs[15]==1) {
+   scrollProgress+=1;
+   if(scrollProgress%3==0){
+    scrollProgress=0;
+    simulateScroll(1);
+    }
+   }
+  else if (controllerStr1.inputs[15]==-1) {
+   scrollProgress+=1;
+   if(scrollProgress%3==0){
+    scrollProgress=0;
+    simulateScroll(-1);
+    }
+   }
+  }
+ if(rightShoulderTime>0){
+  rightShoulderTime+=1;
+  if(rightShoulderTime>25){
+   rightShoulderTime=0;
+   }
+  }
+ if(keyboardSwitch){
+  int x1=controllerStr1.inputs[14]*deadzone*6,y1=controllerStr1.inputs[15]*deadzone*6;
+  if( controllerStr1.inputs[14]!=0&&controllerStr1.inputs[15]!=0){
+   x1=x1/2;
+   y1=y1/2;
+   }
+  mouseMove(x1,-y1);
+  }
+ }
+
+//!main//
+int main(int argc, char* argv[]) {
+ init();
+ if (controllerInit() != 0) {
+  return 1;
+ }
+SDL_SetRelativeMouseMode(SDL_TRUE); // hides cursor, gives relative motion
+
+ graphicsBegin();
+ while (running) {
+  update();
+  controllerUpdate();
+  while (SDL_PollEvent(&event)) {
+   switch (event.type) {
+    case SDL_QUIT:
+     running = false;
+     break;
+    }
+   controllerEvent(event);
+   }
+  }
+ 
+ if (joystick1 != nullptr) {
+  SDL_JoystickClose(joystick1);
+ }
+ if (controller1 != nullptr) {
+  SDL_GameControllerClose(controller1);
+ }
+ SDL_Quit();
+ return 0;
+ }
+
+#!v2 2025 aug30
+#include <SDL2/SDL.h>
+#include <iostream>
+#include <vector>
+
+#include <string>
+#include <fstream>
+
+#ifdef __linux__
+ #include <X11/Xlib.h>
+ #include <X11/extensions/XTest.h>
+ #include <X11/keysym.h>
+ #include <X11/keysymdef.h>
+#elif _WIN32
+ #include <Windows.h>
+ #endif
+
+//!resources//
+SDL_Event event;
+bool running = true;
+int screenX = 0, screenY = 0;
+float maxFrames = 60.0f;
+Uint64 frameStartTicks,frameEndTicks,elapsedTicks = 0,TICKS_PER_FRAME,TICKS_PER_SECOND;
+//(controller)
+int deadzone = 4000, leftTrigger = 0, rightTrigger = 0, leftY = 0, leftX = 0, rightY = 0, rightX = 0, hatState = 0;
+SDL_Joystick* joystick1 = nullptr;
+int numJoysticks = 0;
+SDL_GameController* controller1 = nullptr;
+int rightShoulderTime=0;
+//(graphics)
+static int wheelWidth=40,wheelHeight=24;
+int wheelMax=6,lineLength=6;
+float radius=5.0f, centerX=wheelWidth/2.0f, centerY=wheelHeight/2.0f;
+std::vector<std::string> keyMap = {"A","B","C","D","E","F","G","H","I", "J","K","L","M", "N","O","P","Q","R","S","T","U","V", "W","X","Y","Z", "0","1","2","3","4","5","6","7","8", "9", "Plus", "Minus", "Asterisk", "Slash", "Semicolon", "Comma", "Period", "Percent", "Quote", "ParenLeft", "ParenRight", "BraceLeft", "BraceRight", "BracketLeft", "BracketRight", "Tab","BackSpace", "Escape","Return", "Space","Left", "Right","Up","Down","PageUp","PageDown"};
+std::vector<std::string> keySymbols = {
+ "A","B","C","D","E","F","G","H","I",
+ "J","K","L","M","N","O","P","Q","R","S",
+ "T","U","V","W","X","Y","Z",
+ "0","1","2","3","4","5","6","7","8","9",
+ "+","-","*","/",";",",",".","%","\"",
+ "(",")","{","}","[","]",
+ "↹","⌫","⎋","⏎","␣",
+ "←","→","↑","↓", "⇞", "⇟"};
+//(conTab)
+int conTabSelect=-1,conTabSelectSave=-1;
+int autoKey=0,conTabSpecial=-1;
+bool keyboardSwitch=false,specialOn=false;
+//(terminal)
+std::vector<std::vector<std::string>> grid(
+    wheelHeight, std::vector<std::string>(wheelWidth));
+std::string input;
+
+int myAbs(int x) {
+ return (x < 0) ? -x : x;
+ }
+
+//!scroll//
+int scrollProgress=-1;
+
+//!simulate//
+#ifdef __linux__
+ void simulateMouseClick(unsigned int button, bool press = true) {
+  Display *display = XOpenDisplay(NULL);
+  if (display == NULL) {
+   std::cerr << "Failed to open X display" << std::endl;
+   return;
+  }
+  if (press) {
+   XTestFakeButtonEvent(display, button, True, 0);
+  } else {
+   XTestFakeButtonEvent(display, button, False, 0);
+  }
+  XFlush(display);
+  XCloseDisplay(display);
+ } 
+ void simulateScroll(int direction) {
+  Display *display = XOpenDisplay(NULL);
+  if (display == NULL) {return;}
+  unsigned int button = (direction > 0) ? 4 : 5;
+  XTestFakeButtonEvent(display, button, True, 0);
+  XTestFakeButtonEvent(display, button, False, 0);
+  XFlush(display);
+  XCloseDisplay(display);
+  }
+ void simulateKeyPress(KeySym keysym, bool press = true) {
+  Display *display = XOpenDisplay(NULL);
+  if (display == NULL) {return;}
+  KeyCode keycode = XKeysymToKeycode(display, keysym);
+  if (keycode == 0) {
+   std::cerr << "Failed to convert keysym to keycode" << std::endl;
+   XCloseDisplay(display);
+   return;
+   } 
+  XTestFakeKeyEvent(display, keycode, press ? True : False, 0);
+  XFlush(display);
+  XCloseDisplay(display);
+  }
+ 
+#elif _WIN32
+ void simulateMouseClick(int button, bool press = true) {
+  INPUT input = { 0 }; // Create an INPUT structure to hold event data
+  input.type = INPUT_MOUSE; // We're simulating a mouse event
+  if (button == 1 ) {
+   input.mi.dwFlags = press ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+   } else if (button == 3){
+   input.mi.dwFlags = press ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+   } else if (button == 2) {
+   input.mi.dwFlags = press ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+   }
+  SendInput(1, &input, sizeof(INPUT));
+  }
+ #endif
+
+void pressChar(std::string special = "") {
+ std::string key;
+ if (!special.empty()) {
+  key = special;
+  }
+ KeySym keySym = XStringToKeysym(key.c_str());
+ if (keySym != NoSymbol) {
+  simulateKeyPress(keySym, true);
+  simulateKeyPress(keySym, false);
+  }
+ }
+
+//!graphics//
+void graphicsWheel(int begin=0,int amount=35,int max=6){
+ system("clear");
+ if(specialOn){begin+=36;}
+ std::vector<std::string> newLetters;
+ for (int i = begin; i<=amount+begin && i<keySymbols.size(); i++) {
+  newLetters.push_back(keySymbols[i]);
+  }
+ std::cout<<"hatLeft/Right=+/- hatUp/Down=wheelUp/Down\nleftButton=backspace rightButton=escape centerButton=return leftShoulder=tab\ndoubleRightShoulder=mouseToJoystick leftTrigger=loopKeyPress\nrightTrigger=slowCursorSpeed\njoystickMouse is "<<keyboardSwitch;
+ lineLength=max;
+ for (int y = 0; y < wheelHeight; y++) {
+  for (int x = 0; x < wheelWidth; x++) {
+   grid[y][x] = " ";
+   }
+  }
+ int currentLetterIndex = 0;
+ int totalLettersNeeded = wheelMax * lineLength;
+ for (int i = 0; i < wheelMax; i++) {
+  double angle = 2.0 * M_PI * i / wheelMax;
+  for (int j = 0; j < lineLength; j++) {
+   float currentLineRadius = radius + (j * 1.5f); 
+   float tempX = centerX + currentLineRadius * cos(angle);
+   float tempY = centerY + currentLineRadius * sin(angle);
+   int lineX = static_cast<int>(std::round(tempX)); 
+   int lineY = static_cast<int>(std::round(tempY));
+   if (currentLetterIndex < newLetters.size() && lineX >= 0 && lineX < wheelWidth && lineY >= 0 && lineY < wheelHeight) {
+
+     grid[lineY][lineX] = keySymbols[currentLetterIndex+begin];
+  /*if (keySymbols[currentLetterIndex+begin].size() == 1) {
+     } else {
+     grid[lineY][lineX]= keySymbols[currentLetterIndex+begin];
+     }*/
+    }
+   currentLetterIndex++;
+   }
+  }
+ for (int y = 0; y < wheelHeight; y++) {
+  for (int x = 0; x < wheelWidth; x++) {
+   std::cout << grid[y][x];
+   }
+  std::cout << std::endl;
+  }
+ }
+
+void graphicsBegin(){
+ graphicsWheel();
+ }
+
+//!window//
+void init(){
+ TICKS_PER_SECOND = SDL_GetPerformanceFrequency();
+ TICKS_PER_FRAME = TICKS_PER_SECOND / static_cast<Uint64>(maxFrames);
+ }
+
+void update(){
+ frameEndTicks = SDL_GetPerformanceCounter();
+ elapsedTicks = frameEndTicks - frameStartTicks;
+ if (elapsedTicks < TICKS_PER_FRAME) {
+  Uint64 remainingTicks = TICKS_PER_FRAME - elapsedTicks;
+  Uint32 delayMs = (Uint32)(((double)remainingTicks / TICKS_PER_SECOND) * 1000.0);
+  if (delayMs > 0) { 
+   SDL_Delay(delayMs);
+   }
+  }
+ frameStartTicks = SDL_GetPerformanceCounter();
+ }
+
+//!conTab//
+void wheelMove(int x,int y,bool exec){
+ if (myAbs(x)>deadzone|| myAbs(y)>deadzone){
+  double angleRadians = atan2(y, x);
+  double angleDegrees = angleRadians * 180.0 / M_PI;
+  if (angleDegrees < 0) {
+   angleDegrees += 360.0;
+   }
+  angleDegrees+= 30.0;
+  if (angleDegrees >= 360.0) {
+   angleDegrees -= 360.0;
+   }
+  if(keyboardSwitch){
+   if(exec){conTabSelect= static_cast<int>(angleDegrees/360*6);}else{conTabSelectSave= static_cast<int>(angleDegrees/360*6);}
+   }else{conTabSelect= static_cast<int>(angleDegrees/360*6);}
+  if(conTabSelectSave!=-1 && conTabSelect!=-1&& exec){
+   if (autoKey>9999999){
+    int selectWheel= static_cast<int>(specialOn)*36+conTabSelectSave*6+ conTabSelect;
+    if(selectWheel<keyMap.size()){pressChar( keyMap[selectWheel]);}
+    autoKey=0;
+    }else{
+    autoKey+=leftTrigger*100;
+    }
+   }
+  }else {
+  if(exec&& conTabSelect!=-1){
+   int selectWheel= static_cast<int>(specialOn)*36+conTabSelectSave*6+ conTabSelect;
+   if(selectWheel<keyMap.size()){pressChar( keyMap[selectWheel]);}
+   if(!keyboardSwitch){graphicsWheel();}
+   conTabSelect=-1;conTabSelectSave=-1;
+   }else if(conTabSelect!=-1&& !keyboardSwitch){
+   graphicsWheel(conTabSelect*6,6,1); 
+   conTabSelectSave=conTabSelect;
+   conTabSelect=-1;
+   }
+  }
+ }
+
+//!controller//
+void mouseMove(int x, int y){
+ if (joystick1 == nullptr) return;
+ if (myAbs(x) > deadzone || myAbs(y) > deadzone) {
+  if (rightTrigger > 0 && 10000.0f/rightTrigger < 1.0f){
+   x = x * 10000.0f / (rightTrigger*1.7f);
+   y = y * 10000.0f / (rightTrigger*1.7f);
+   }
+  float sensitivity = 0.024f; 
+  float normalizedX = static_cast<float>(x) / 32767.0f;
+  float normalizedY = static_cast<float>(y) / 32767.0f;
+  int newMouseX = static_cast<int>(normalizedX * sensitivity * 1000);
+  int newMouseY = static_cast<int>(normalizedY * sensitivity * 1000 );
+  SDL_WarpMouseGlobal(screenX + newMouseX, screenY + newMouseY); 
+  }
+ }
+
+static void scroll(int scrollAmount) {
+ SDL_Event wheelEvent;
+ wheelEvent.type = SDL_MOUSEWHEEL;
+ wheelEvent.wheel.timestamp = SDL_GetTicks();
+ wheelEvent.wheel.windowID = 0;
+ wheelEvent.wheel.which = 0;
+ wheelEvent.wheel.x = 0;
+ wheelEvent.wheel.y = scrollAmount;
+ wheelEvent.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+ SDL_PushEvent(&wheelEvent);
+ }
+
+struct controllerStr{
+ //0-1:lAnalog 2-3:rAnalog 4-7:rBut 8-9:lrSho 10-11:lrTrig  12-13:mBut 14-15:xyHat
+ std::vector <int> order;
+ int active[16] = {0};
+ int inputs[16] = {0};
+
+ void event(SDL_Event e){
+  if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+   if (e.cbutton.button == SDL_CONTROLLER_BUTTON_A) {
+    inputs[4] = deadzone * 8;
+    active[4] = true;
+    }
+   }
+  if (e.type == SDL_CONTROLLERAXISMOTION) {
+   if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) {
+    if (joystick1 != nullptr) {
+     inputs[0] = SDL_JoystickGetAxis(joystick1, 0);
+     active[0] = (deadzone < inputs[0]) ? true : false;
+    }
+    }
+   }
+  }
+ void swap(){
+  }
+ };
+controllerStr controllerStr1;
+
+int controllerInit(){
+ if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
+  std::cerr << "SDL_Init Error: " << SDL_GetError() << std::endl;
+  return 1;
+  }
+ numJoysticks = SDL_NumJoysticks();
+ if (numJoysticks > 0) {
+  joystick1 = SDL_JoystickOpen(0);
+  if (joystick1 == nullptr) {
+   std::cerr << "Failed to open joystick: " << SDL_GetError() << std::endl;
+   }
+  controller1 = SDL_GameControllerOpen(0);
+  if (controller1 == nullptr) {
+   std::cerr << "Failed to open game controller: " << SDL_GetError() << std::endl;
+   }
+  } else {
+  std::cout << "No joysticks detected" << std::endl;
+  }
+ return 0;
+ }
+
+void controllerEvent(SDL_Event e){
+ switch(e.type){
+  case SDL_JOYDEVICEADDED:
+   if (joystick1 == nullptr) {
+    joystick1 = SDL_JoystickOpen(e.jdevice.which);
+   }
+   break;
+  case SDL_JOYDEVICEREMOVED: 
+   if (joystick1 != nullptr) {
+    SDL_JoystickClose(joystick1);
+    joystick1 = nullptr;
+   }
+   break;
+  case SDL_CONTROLLERDEVICEADDED: 
+   if (controller1 == nullptr) {
+    controller1 = SDL_GameControllerOpen(e.cdevice.which);
+   }
+   break;
+  case SDL_CONTROLLERDEVICEREMOVED: 
+   if (controller1 != nullptr) {
+    SDL_GameControllerClose(controller1);
+    controller1 = nullptr;
+   }
+   break;
+  case SDL_JOYBUTTONDOWN:
+   std::cout << "Button " << static_cast<int>(event.jbutton.button) << " pressed." << std::endl;
+   if (joystick1 == nullptr) break;
+   switch (e.jbutton.button) {
+    case 0: // bottom button
+     simulateMouseClick(3);
+     break;
+    case 1: // Right button
+     simulateMouseClick(2);
+     break;
+    case 2: // L button
+     simulateMouseClick(1);
+     break;
+    case 4:
+     break;
+    case 6:
+     simulateKeyPress(XK_BackSpace, true);  
+     break;  
+    case 7:
+     simulateKeyPress(XK_Escape, true);  
+     break; 
+    case 8:
+     simulateKeyPress(XK_Return, true);  
+     break; 
+    }
+   break;
+  case SDL_JOYBUTTONUP:
+   if (joystick1 == nullptr) break;
+   switch (e.jbutton.button) {
+    case 0: // bottom button
+     simulateMouseClick(3, false);
+     break;
+    case 1: // Right button
+     simulateMouseClick(2, false);
+     break;
+    case 2: // L button
+     simulateMouseClick(1, false);
+     break;
+    case 4:
+     specialOn=!specialOn;
+     graphicsWheel();
+     break;
+    case 5:
+     if(rightShoulderTime>0){
+      keyboardSwitch=!keyboardSwitch;
+      conTabSelect=-1;conTabSelectSave=-1;
+      graphicsWheel();
+      }else{
+      rightShoulderTime+=1;
+      }
+     break;
+    case 6:
+     simulateKeyPress(XK_BackSpace, false);  
+     break;
+    case 7:
+     simulateKeyPress(XK_Escape, false);  
+     break;  
+    case 8:
+     simulateKeyPress(XK_Return, false);  
+     break; 
+    }
+   break;
+  case SDL_JOYAXISMOTION:
+   if (joystick1 == nullptr || controller1 == nullptr){break;}
+   rightX = SDL_JoystickGetAxis(joystick1, 3);
+   rightY = SDL_JoystickGetAxis(joystick1, 4);
+   leftX = SDL_JoystickGetAxis(joystick1, 0);
+   leftY = SDL_JoystickGetAxis(joystick1, 1);
+   switch (e.jaxis.axis) {
+    case 2:
+     leftTrigger = SDL_GameControllerGetAxis(controller1, SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+     break;
+    case 5:
+     rightTrigger = SDL_GameControllerGetAxis(controller1, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+     break;
+    }
+   if(keyboardSwitch){
+    if (myAbs(leftX)<deadzone&& myAbs(leftY)<deadzone){
+     conTabSelect=-1,conTabSelectSave=-1;
+     }else{
+      wheelMove(leftX,leftY,false);
+     if(conTabSelectSave==-1){}else{
+      wheelMove(rightX,rightY,true);}
+     }
+    }
+   break;
+  case SDL_JOYHATMOTION:
+   hatState = e.jhat.value;
+   if(hatState == SDL_HAT_UP){controllerStr1.inputs[15]=1;controllerStr1.inputs[14]=0;}
+    else if(hatState == SDL_HAT_DOWN){controllerStr1.inputs[15]=-1;controllerStr1.inputs[14]=0;}
+    else if(hatState == SDL_HAT_RIGHT){controllerStr1.inputs[14]=1;controllerStr1.inputs[15]=0;}
+   if(hatState == SDL_HAT_LEFT){controllerStr1.inputs[14]=-1;controllerStr1.inputs[15]=0;}
+    else if(hatState == SDL_HAT_LEFTDOWN){
+    controllerStr1.inputs[14]=-1;
+    controllerStr1.inputs[15]=-1;}
+    else if(hatState == SDL_HAT_RIGHTDOWN){controllerStr1.inputs[14]=1;
+controllerStr1.inputs[15]=-1;}
+    else if(hatState == SDL_HAT_LEFTUP){controllerStr1.inputs[14]=-1; controllerStr1.inputs[15]=1;}
+    else if(hatState == SDL_HAT_RIGHTUP){controllerStr1.inputs[14]=1; controllerStr1.inputs[15]=1;}
+   if(hatState==0){
+    controllerStr1.inputs[14]=0;
+    controllerStr1.inputs[15]=0;
+    }
+   if(!keyboardSwitch){
+    static Uint8 prevHatState = 0;
+    if (hatState == prevHatState) {break;}
+    if (prevHatState == SDL_HAT_RIGHT) {
+     simulateKeyPress(XK_KP_Add, false);
+     }else if (prevHatState == SDL_HAT_LEFT) {
+     simulateKeyPress(XK_KP_Subtract, false);
+     }else if (prevHatState == SDL_HAT_LEFTDOWN) {
+     simulateKeyPress(XK_Alt_L, false);
+     }else if (prevHatState == SDL_HAT_RIGHTDOWN) {
+     simulateKeyPress(XK_Shift_L, false);
+     }
+    if(controllerStr1.inputs[14]==1){
+     simulateKeyPress(XK_KP_Add, true);
+     }
+    else if(controllerStr1.inputs[14]==-1){
+     simulateKeyPress(XK_KP_Subtract, true);
+     }
+    prevHatState = hatState;
+    }
+   break;
+  }
+ }
+
+void controllerUpdate(){
+ if (joystick1 == nullptr || !SDL_JoystickGetAttached(joystick1)){
+  if (SDL_NumJoysticks() > 0) {
+   joystick1 = SDL_JoystickOpen(0);
+   }
+  return;
+  }
+ SDL_GetGlobalMouseState(&screenX, &screenY);
+ if(!keyboardSwitch){
+  mouseMove(leftX,leftY);
+  wheelMove(rightX, rightY,conTabSelectSave!=-1&& conTabSelect!=-1);
+  }
+ if (controllerStr1.inputs[14]==0&& !keyboardSwitch) { 
+  if (controllerStr1.inputs[15]==1) {
+   scrollProgress+=1;
+   if(scrollProgress%3==0){
+    scrollProgress=0;
+    simulateScroll(1);
+    }
+   }
+  else if (controllerStr1.inputs[15]==-1) {
+   scrollProgress+=1;
+   if(scrollProgress%3==0){
+    scrollProgress=0;
+    simulateScroll(-1);
+    }
+   }
+  }
+ if(rightShoulderTime>0){
+  rightShoulderTime+=1;
+  if(rightShoulderTime>25){
+   rightShoulderTime=0;
+   }
+  }
+ if(keyboardSwitch){
+  int x1=controllerStr1.inputs[14]*deadzone*6,y1=controllerStr1.inputs[15]*deadzone*6;
+  if( controllerStr1.inputs[14]!=0&&controllerStr1.inputs[15]!=0){
+   x1=x1/2;
+   y1=y1/2;
+   }
+  mouseMove(x1,-y1);
+  }
+ }
+
+//!save//
+void save(){
+ std::ofstream file("config.txt");
+ file << "wheelWidth=" << wheelWidth << "\n";
+ file << "wheelHeight=" << wheelHeight << "\n";
+ file << "wheelMax=" << wheelMax << "\n";
+ file << "lineLength=" << lineLength << "\n";
+ file << "radius=" << radius << "\n";
+ file << "centerX=" << centerX << "\n";
+ file << "centerY=" << centerY << "\n";
+ file << "keyMap=";
+ for (size_t i = 0; i < keyMap.size(); ++i) {
+  file << keyMap[i];
+  if (i != keyMap.size()-1) file << ",";
+  }
+ file << "\n";
+ file << "keySymbols=";
+ for (size_t i = 0; i < keySymbols.size(); ++i) {
+  file << keySymbols[i];
+  if (i != keySymbols.size()-1) file << ",";
+  }
+ file << "\n";
+ file.close();
+ }
+
+void loadSave(){
+ std::ifstream file("config.txt");
+ if (!file.is_open()) {
+  std::cout << "!config.txt\n";
+  save();
+  return;
+  }
+ std::string line;
+ while (std::getline(file, line)) {
+  size_t pos = line.find('=');
+  if (pos == std::string::npos) continue;
+  std::string key = line.substr(0, pos);
+  std::string value = line.substr(pos+1);
+  if (key == "wheelWidth") wheelWidth = std::stoi(value);
+   else if (key == "wheelHeight") wheelHeight = std::stoi(value);
+   else if (key == "wheelMax") wheelMax = std::stoi(value);
+   else if (key == "lineLength") lineLength = std::stoi(value);
+   else if (key == "radius") radius = std::stod(value);
+   else if (key == "centerX") centerX = std::stod(value);
+   else if (key == "centerY") centerY = std::stod(value);
+   else if (key == "keyMap") {
+    keyMap.clear();
+    size_t start = 0, end;
+    while ((end = value.find(',', start)) != std::string::npos) {
+     keyMap.push_back(value.substr(start, end-start));
+     start = end+1;
+     }
+    keyMap.push_back(value.substr(start));
+    }
+   else if (key == "keySymbols") {
+   keySymbols.clear();
+   size_t start = 0, end;
+   while ((end = value.find(',', start)) != std::string::npos) {
+    keySymbols.push_back(value.substr(start, end-start));
+    start = end+1;
+    }
+   keySymbols.push_back(value.substr(start));
+   }
+  }
+ file.close();
+ }
+
+//!main//
+int main(int argc, char* argv[]) {
+ loadSave();
+ init();
+ if (controllerInit() != 0) {
+  return 1;
+ }
+ graphicsBegin();
+ while (running) {
+  update();
+  controllerUpdate();
+  while (SDL_PollEvent(&event)) {
+   controllerEvent(event);
+   }
+  }
+ if (joystick1 != nullptr) {
+  SDL_JoystickClose(joystick1);
+  }
+ if (controller1 != nullptr) {
+  SDL_GameControllerClose(controller1);
+  }
+ SDL_Quit();
+ return 0;
+ }

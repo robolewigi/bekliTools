@@ -1,3 +1,96 @@
+#!readline
+#include <readline/readline.h>
+#include <readline/history.h>
+#include <iostream>
+#include <string>
+
+int main() {
+    char* line = nullptr;
+    
+    while ((line = readline("prompt> ")) != nullptr) {
+        if (strlen(line) > 0) {
+            add_history(line);  // Add to history
+            std::cout << "You entered: " << line << std::endl;
+        }
+        free(line);
+    }
+    
+    return 0;
+}
+
+#!save
+#include <fstream>
+#include <string>
+#include <vector>
+
+int main() {
+    std::string myString = "Hello World";
+    int myInt = 42;
+    std::vector<std::vector<int>> myVector = {
+        {1, 2, 3},
+        {4, 5, 6, 7, 8},
+        {9}
+    };
+
+    std::ofstream file("config.txt");
+    if (!file.is_open()) return 1;
+
+    // Write with labels
+    file << "STRING:" << myString << "\n";
+    file << "INT:" << myInt << "\n";
+    file << "VECTOR_SIZE:" << myVector.size() << "\n";
+    for (const auto& vec : myVector) {
+        file << "ARRAY:" << vec.size();
+        for (int val : vec) {
+            file << " " << val;
+        }
+        file << "\n";
+    }
+
+    file.close();
+    return 0;
+}
+
+#!load
+#include <fstream>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <iostream>
+
+int main() {
+    std::string myString;
+    int myInt;
+    std::vector<std::vector<int>> myVector;
+
+    std::ifstream file("config.txt");
+    std::string line;
+    
+    while (std::getline(file, line)) {
+        if (line.find("STRING:") == 0) {
+            myString = line.substr(7);
+        }
+        else if (line.find("INT:") == 0) {
+            myInt = std::stoi(line.substr(4));
+        }
+        else if (line.find("ARRAY:") == 0) {
+            std::istringstream iss(line.substr(6));
+            int size, val;
+            iss >> size;
+            std::vector<int> innerVec;
+            while (iss >> val) {
+                innerVec.push_back(val);
+                std::cout << val << "\n";
+            }
+            myVector.push_back(innerVec);
+        }
+    }
+    
+    file.close();
+    return 0;
+}
+
+#!backup
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <SDL2/SDL.h>
@@ -19,23 +112,7 @@ int deadzone= maxValue/4, controlValues[]= {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0
 int controlIndexes[]= {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28}; //0-3= DRLU button 4-5= LR should 6-8= LRM center 9-10= LR joyButton 11-14= LR XY joystick 15-16= LR trig 17-28= hatDirections
 char* console;
 int updateTimer=15000;
-std::vector<std::string> profileNames={"default"};
-std::vector<std::vector<int>> profileMaps={{11,6,6,6}};
-int profileExample[]= {5,-1,11,-1,17,-1,23,-1,29,-1,35,4,-1,10,-1,16,-1,22,-1,28,-1,34,
-3,-1,9,-1,15,-1,21,-1,27,-1,33,2,-1,8,-1,14,-1,20,-1,26,-1,32,01,-1,07,-1,13,-1,19,-1,25,-1,31,0,-1,6,-1,12,-1,18,-1,24,-1,30};
-int profileI=0;
-std::vector<std::string> keyMap = {"A","B","C","D","E","F","G","H","I", "J","K","L","M", "N","O","P","Q","R","S","T","U","V", "W","X","Y","Z", "0","1","2","3","4","5","6","7","8", "9", "Plus", "Minus", "Asterisk", "Slash", "Semicolon", "Comma", "Period", "Percent", "Quote", "ParenLeft", "ParenRight", "BraceLeft", "BraceRight", "BracketLeft", "BracketRight", "Tab","BackSpace", "Escape","Return", "Space","Left", "Right","Up","Down","PageUp","PageDown"};
-std::vector<std::string> keySymbols = {
- "A","B","C","D","E","F","G","H","I",
- "J","K","L","M","N","O","P","Q","R","S",
- "T","U","V","W","X","Y","Z",
- "0","1","2","3","4","5","6","7","8","9",
- "+","-","*","/",";",",",".","%","\"",
- "(",")","{","}","[","]",
- "↹","⌫","⎋","⏎","␣",
- "←","→","↑","↓", "⇞", "⇟"};
-
-void helpMenu(){ std::cout<< "commands+ AliAses:\n'HElp' 'DISplay' 'CLearS'' 'CONtrols'\n'COntrolsDisplay' 'UPdateTimer'("<< updateTimer<< "microseconds)\n'PROfile'\nexamples: 'help' 'dis' 'clear' 'updatetimer 44444' 'profile 0'\n\n";}
+void helpMenu(){ std::cout<< "commands+ AliAses:\n'HElp' 'DiSplay' 'CLearS'' 'ConTRols'\n'ConTRolsDiSplay' 'UPdateTimer'("<< updateTimer<< "microseconds)\n'ConTRolsDiSplay'\nexamples: 'help' 'ds' 'clear' 'updatetimer 44444'\n\n";}
 
 int main(int argc, char* argv[]) { 
  controlInit();
@@ -48,8 +125,8 @@ int main(int argc, char* argv[]) {
  return 0;
 }
 
-int getValue(std::string valueText="-2"){
- int value=-2;
+int getValue(std::string valueText="-1"){
+ int value=-1;
  value = std::stoi(valueText);
  if (value>0){
   updateTimer= value;
@@ -58,7 +135,7 @@ int getValue(std::string valueText="-2"){
 }
 
 void consoleFunc(){
- std::string consoleNames[]= {"", "(con)", "(dis)", "(cod)"};
+ std::string consoleNames[]= {"", "(ctr)", "(ds)", "(ctrds)"};
  while ((console = readline(consoleNames[consoleState].c_str())) != nullptr) {
   if (strlen(console) > 0) {add_history(console); }
   std::stringstream ss(console);
@@ -68,8 +145,8 @@ void consoleFunc(){
   for (char& c : part) {c = std::tolower(c);}
    parts.push_back(part);
   }
-  if(parts.size()<7){parts.resize(7,"-2");}
-  if(parts[0]== "-2"){
+  if(parts.size()<3){parts.resize(3,"-1");}
+  if(parts[0]== "-1"){
    free(console);
    consoleState=0;
    continue;
@@ -77,17 +154,17 @@ void consoleFunc(){
 
   if (parts[0]=="help"|| parts[0]=="he"){ 
    helpMenu();
-  }else if(parts[0]=="display"|| parts[0]=="dis"){   
+  }else if(parts[0]=="display"|| parts[0]=="ds"){   
   }else if(parts[0]=="updatetimer"|| parts[0]=="upt"){
    int value= getValue(parts[1]);
-   if (value==-2){
+   if (value==-1){
     std::cout<<"try 'updatetimer 40000'\n"<< std::endl;
    }else{
     std::cout<< "success: "<< value<< "\n"<< std::endl;
    }
   }else if(parts[0]=="clear"|| parts[0]=="cls"|| parts[0]=="clears"){
    system("clear");
-  }else if(parts[0]=="controls"|| parts[0]=="con"){
+  }else if(parts[0]=="controls"|| parts[0]=="ctr"){
    if(parts.size()!= 25){
     std::cout<< "current controls: 'ctr";
     for (int index : controlIndexes) {std::cout <<" " << index; }
@@ -99,7 +176,7 @@ void consoleFunc(){
     bool failed=false;
     for(int i=0; i<29;i++){
      int value= getValue(parts[i+1]);
-     if(value==-2){
+     if(value==-1){
       failed=true;
       std::cout<< "error at: "<< i<< std::endl;
      }else{
@@ -114,85 +191,13 @@ void consoleFunc(){
      std::cout<< "\nsuccess\n"<< std::endl;
     }
    }
-  }else if(parts[0]=="controlsdisplay"|| parts[0]=="cod"){
+  }else if(parts[0]=="controlsdisplay"|| parts[0]=="ctrds"){
    
   }else if(parts[0]=="specialbutton"|| parts[0]=="spe"){
    
-  }else if(parts[0]=="profile"|| parts[0]=="pro"){
-   if (parts[1]=="-2"){
-    if(profileNames.size()>profileI){
-     std::cout<< "current profile: "<< profileNames[profileI]<< "\n";
-    }else{std::cout<< "current profile: N/A\n";}
-     std::cout<< "profileNames: \n";
-     for(std::string name: profileNames){
-      std::cout<< name<< " ";
-     }
-     std::cout<< "\ntry: 'profile name 11 6 6 6\n";
-     for(int i=0; i<std::size(profileExample); i++){
-      std::cout<<profileExample[i]<< " ";
-      if(i%10==0&& i!=0){std::cout<<"\n";}
-      if(i==std::size(profileExample)-1){
-       std::cout<< "'"<< std::endl;
-      }
-     }
-    }
-   }else if(parts[2]=="-2"){
-    int value= getValue(parts[1]);
- std::cout<<7;
-    if(value< profileNames.size()){
-     profileI= value;
-     std::cout<< "current: "<< profileNames[value]<< "\n"<< std::endl;
-    }else{std::cout<< "invalid\n"<< std::endl;}
-   
-   }else if(parts[5]=="-2"){
-    std::cout<< "try:\n'profile name 11 6 6 6'\n"<< std::endl;
-
-   }else if(parts[6]=="-2"){
-    int value= getValue(parts[3]);
-    int value2= getValue(parts[2]);
-    if(value!=-1&& value2!=-1){
-     std::cout<< "invalid try:\n'profile name 11 6 6 6'\n"<< std::endl;
-    }else{
-     for(int y=0; y< value2;y++){
-      std::cout<<"\n";
-      for(int x=0; x< value;x++){
-       std::cout<< "-1 ";
-      }
-     }
-     std::cout<< "\n"<< std::endl;
-    }
-   }else if(parts[6]!="-2"){
-    int values[]={getValue(parts[2]), getValue(parts[3]), getValue(parts[4]), getValue(parts[5])};
-    for(int i=0;i<4;i++){
-     if(values[i]==-2){
-      std::cout<< "invalid at: "<< i<< " index\n"<< std::endl;
-      break;
-     }
-     if(i==3){
-      profileNames.push_back(parts[1]);
-      std::vector<int> intValues;
-      for (int i = 2; i < parts.size(); i++) {
-       intValues.push_back(getValue(parts[i]));
-      }
-      profileMaps.push_back(intValues);
-     }
-    }
   }else if(parts[0]=="debug"){
    debugOn=!debugOn;
-   if(parts[1]=="profileMaps"){
-    for(int i=0;i<profileMaps.size();i++){
-     std::cout<< "\nprofile: "<< profileNames[i]<< "\n";
-     for(int j=0;j<profileMaps[i].size(); j++){
-      std::cout<< profileMaps[i][j];
-     }
-    }
-    std::cout<< "\n"<<std::endl;
-  }else{
-   std::cout<<"invalid:";
-   for (std::string part: parts){std::cout<< " "<< part;}
-    std::cout<<std::endl;
-   }
-  }
+  }else{std::cout<<"invalid: "<<parts[0]<<std::endl;}
   free(console);
  }
  running=false;

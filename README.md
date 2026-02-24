@@ -23,3 +23,11 @@ Voice recognition runs on vosk which can be downloaded at setup
   <img src="images/icon.png" alt="Example 1" width="133"/>
   <img src="images/microphone.png" alt="Example 3" width="199"/>
 </p>
+
+### painting
+draw images export in a .txt such as "width, [xy, rgb], [...]"
+
+<p>
+  <img src="images/painting.png" alt="image 4" width="133"/>
+</p>
+

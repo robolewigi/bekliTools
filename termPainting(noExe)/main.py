@@ -1,0 +1,405 @@
+import sys
+import select
+import termios
+import shutil
+import tty, os, traceback, time
+import subprocess
+
+reset = "\033[0m"
+class variables():
+ running=0
+ sizeX= 16
+ sizeY= 16
+ map=[-1 for _ in range(sizeX*sizeY)]
+ buffer=[]
+ help=["commands+AliAses:", "'Help' 'ColoR # # #'('zx') 'EXport (name)'", "'EYEdropper' 'Cut' 'Paste' 'BackGround'", "'IMport (name)'", "SIze (x) (y)", "controls:","enter backspace mouse space", "'LMB' 'RMB' 'wasd' 'zx(history)'", "'frgthy(color)(shift)' 'cv(cutPaste)'", "'c(shift)'"]
+ console=""
+ loc=0
+ consoleState=0 #0-display 1-console 2-colorDraw 3-remove 4-cutColor 5-help 6-paste 7-eyeDropper
+ xy=[0,0] #size
+ selectColor= 200* (256*256)+ 150* 256+ 32 #13145632 value//(256*256)= r (v//256)%256= g v%256= b
+ selectLoc= -1
+ debug=0
+ saveSelect=[]
+ history=0
+ maxHistory=50
+ mapHistory=[]
+ copyMap=[] #[[xy,rgb],[...,...]]
+ background= -1
+v= variables()
+
+def cursorVisible():
+ if v.consoleState!=1:
+  print('\033[?25l', end='', flush=True)
+ else:
+  print('\033[?25h', end='', flush=True)
+
+def pickColor(c, set=0): #0-background 1-text 2- rgbToHex 3-hueToRgb
+ if c==-1: return ''
+ if set==0: #background
+  return f"\033[48;2;{c//(256*256)};{c//256%256};{c%256}m"
+ elif set==1: #text
+  return f"\033[38;2;{c[0]};{c[1]};{c[2]}m"
+
+def disableControls():
+ old_settings = termios.tcgetattr(sys.stdin)
+ iflag, oflag, cflag, lflag, ispeed, ospeed, cc = termios.tcgetattr(sys.stdin)
+ iflag &= ~termios.IXON
+ iflag &= ~termios.ISTRIP
+ iflag &= ~termios.ICRNL
+ iflag &= ~termios.INLCR
+ iflag &= ~termios.IGNCR
+ new_settings = [iflag, oflag, cflag, lflag, ispeed, ospeed, cc]
+ termios.tcsetattr(sys.stdin, termios.TCSANOW, new_settings)
+ return old_settings
+
+def draw():
+ if v.running== 1: return
+ for i in range(v.xy[1]):
+  print(f"\033[{i+1};1H", end="")
+  print("\033[K", end="")
+  print(v.buffer[i], end="")
+ if v.consoleState==1:
+  print(f"\033[{v.xy[1]};{len(v.console)+1}H", end="")
+ else:
+  print(f"\033[{v.loc//v.sizeX};{v.loc%v.sizeX+1}H", end="")
+
+def graphics():
+ newMap= v.map.copy()
+ if v.consoleState== 6:
+  for i in range(len(v.copyMap)):
+   if v.copyMap[i][1]!=-1:
+    newMap[max(min(v.sizeX*v.sizeY-1, v.copyMap[i][0]+v.loc), 0)]= v.copyMap[i][1]
+ for y in range(v.xy[1]-1):
+  v.buffer[y]=""
+  for x in range(v.xy[0]-1):
+   if v.consoleState==5:
+    if len(v.help)>y:
+     if x<len(v.help[y]):
+      v.buffer[y]+= v.help[y][x]
+      continue
+    v.buffer[y]+=' '
+    continue
+   if y*v.sizeX+x== v.loc and x<v.sizeX and y<v.sizeY and not v.consoleState in [1,7]:
+    v.buffer[y]+= pickColor(v.selectColor)+ 'X'+ reset
+    continue
+   elif v.consoleState in [2,3,4]:
+    selectChar='O'
+    if v.consoleState==3: selectChar='D'
+    elif v.consoleState==4: selectChar='C'
+    if y*v.sizeX+ x in v.saveSelect and y<v.sizeY and x<v.sizeX:
+     v.buffer[y]+= pickColor(v.selectColor)+ selectChar+ reset
+     continue
+   newCol= ''
+   if x<v.sizeX and y<v.sizeY:
+    if newMap[y*v.sizeX+x]!=-1:
+     newCol= pickColor(newMap[y*v.sizeX+x])
+     v.buffer[y]+= newCol+ ' '+ reset
+     continue    
+   borderChar=' '
+   if x==v.sizeX and y<v.sizeY: borderChar= '|'
+   elif y==v.sizeY and x<v.sizeX: borderChar= '-'
+   colorView= ''
+   if x<v.sizeX and y<v.sizeY: colorView= pickColor(v.background)
+   if x>v.sizeX+2 and x<v.sizeX+8 and y>0 and y<4:
+    colorView= pickColor(v.selectColor)
+   viewReset= '' if colorView=='' else reset
+   v.buffer[y]+= colorView+ borderChar+ viewReset
+ 
+def historyFunc(set): #0-add 1-execute
+ if set==0:
+  newMap=v.map.copy()
+  if len(v.mapHistory)!=0:
+   if newMap==v.mapHistory[-1]: return
+  v.mapHistory= v.mapHistory[max(0, v.history-v.maxHistory):v.history+1]
+  v.mapHistory.append(newMap)
+  v.history= len(v.mapHistory)-1
+ elif set==1:
+  if len(v.mapHistory)>0:
+   v.map= v.mapHistory[v.history].copy()
+
+def commands(force= 0, mod=0): #0-None 1-cut 2-paste
+ if v.console==1 and forc== 0: return False
+ c= v.console.lower()
+ if c.startswith("export") or c.startswith("ex"):
+  fileText=f"{v.sizeX}, {v.sizeY}, "
+  for i in range(len(v.map)):
+   if v.map[i]!=-1:
+    fileText += f"[{i},{v.map[i]}], "
+  fileText = fileText.rstrip(", ")
+  newText= "new.txt"
+  if len(v.console.split())>1:
+   newText= v.console.split()[1]
+  currentText= newText
+  i=0
+  if not ".txt" in currentText: currentText+=".txt" 
+  while os.path.exists(currentText):
+   index= currentText.find(".txt")
+   if index==-1:
+    currentText+= ".txt"
+    continue
+   i+=1
+   pos=-4
+   if i>1: pos= currentText.rfind(f"{i-1}")
+   currentText= currentText[:pos]+f"{i}"+".txt"
+  with open(currentText, "w") as file:
+   file.write(fileText)
+
+ elif c.startswith("import") or c.startswith("im"):
+  try:
+   parts= c.split()
+   if len(parts)>1:
+    newText= parts[1]
+    if not ".txt" in newText:
+     newText+=".txt"
+    with open(newText, 'r') as file:
+     data = eval(f'[{file.read()}]')
+     v.map= [-1 for _ in range(v.sizeX*v.sizeY)]
+     for idx in data[1:]:
+      v.map[idx[0]]= idx[1]
+  except: pass
+
+ elif c.startswith("size") or c.startswith("si"):
+  try:
+   parts= c.split()
+   if len(parts)>2:
+    x= max(1, int(parts[1]))
+    y= max(1, int(parts[2]))
+    oldSizeX, oldSizeY= v.sizeX, v.sizeY
+    newMap= [-1 for _ in range(x*y)]
+    for row in range(min(oldSizeY, y)):
+     for col in range(min(oldSizeX, x)):
+      newMap[row*x+col]= v.map[row*oldSizeX+col]
+    v.sizeX= x
+    v.sizeY= y
+    v.map= newMap
+    v.loc= min(v.loc%oldSizeX, x-1)+ min(v.loc//oldSizeX, y-1)*x
+    v.consoleState= 0
+    v.saveSelect= [v.loc]
+    v.selectLoc= v.loc
+    v.mapHistory= []
+    v.history= 0
+    historyFunc(0)
+  except: pass
+
+ elif c.startswith("color") or c.startswith("cr") or c.startswith("background") or c.startswith("bg"):
+  parts= c.split()
+  if len(parts)==4:
+   try:
+    col=[]
+    for part in parts[1:]:
+     col.append(max(min(abs(int(part)), 255), 0))
+    if c.startswith("color") or c.startswith("cr"):
+     v.selectColor= col[0]*(256*256)+ col[1]*256+ col[2]
+    else: v.background= col[0]*(256*256)+ col[1]*256+ col[2]
+    return False
+   except: pass
+
+ elif c in ["help", 'h']:
+  v.consoleState=5
+
+ elif c in ["cut", 'c'] or force== 1:
+  if v.consoleState!= 4:
+   v.consoleState= 4
+   v.selectLoc= v.loc
+   v.saveSelect=[v.loc]
+  else:
+   v.consoleState= 0
+   v.copyMap=[]
+   for i in range(len(v.saveSelect)):
+    v.copyMap.append([v.saveSelect[i]-v.saveSelect[0], v.map[v.saveSelect[i]]])
+    if mod==0: v.map[v.saveSelect[i]]= -1
+
+ elif c in ["paste", 'p'] or force== 2:
+  if v.consoleState!= 6:
+   v.consoleState= 6
+  else:
+   v.consoleState= 0
+   for i in range(len(v.copyMap)):
+    v.map[max(0,min(v.sizeX*v.sizeY,v.copyMap[i][0]+v.loc))]= v.copyMap[i][1]
+    
+ elif c in ["eyedropper", 'eye']:
+  if v.consoleState!=7: v.consoleState= 7
+  else: v.consoleState= 0
+ else:
+  if v.console!="":
+   v.running=1
+   result = subprocess.run(v.console, shell=True, capture_output=True, text=True)
+   if result.stdout: print(result.stdout, end="")
+   if result.stderr: print(result.stderr, end="")
+
+def backSpace(key):
+ if not ((key.lower() == ' ' and key.isprintable()) or key == '\x08' or key == '\x7f'): return
+ if v.consoleState==0:
+  v.selectLoc= v.loc
+  v.saveSelect=[v.loc]
+ if key == '\x08' or key == '\x7f': #backsapce
+  if v.consoleState==1:
+   v.console= v.console[:-1]
+  elif v.consoleState==3:
+   historyFunc(0)
+   for i in v.saveSelect:
+    v.map[i] = -1
+   v.consoleState=0
+  elif v.consoleState==0:
+   v.consoleState=3
+  else:
+   v.consoleState=0
+ else: #' '
+  if v.consoleState==1: return
+  elif v.consoleState==0:  
+   v.consoleState=2
+  elif v.consoleState==2:
+   historyFunc(0)
+   v.consoleState=0 
+   for i in range(len(v.saveSelect)):
+    v.map[v.saveSelect[i]] = v.selectColor
+  else: 
+   v.consoleState=0
+
+def onPress(key):
+  skip=False
+  if key== '\r': # Enter key
+   v.consoleState= 1 if not v.consoleState in [1,5] else 0
+   if v.running== 1: v.running= 0
+   skip= commands()
+   v.console= ""
+  backSpace(key)
+
+  if key == '\x1b':  # Escape
+   try:
+    next_char = sys.stdin.read(1)
+    if next_char == '[':
+     third_char = sys.stdin.read(1)
+     if third_char == '<': #mouse
+      seq = ''
+      while len(seq) < 20:
+       c = sys.stdin.read(1)
+       seq += c
+       if c in ('M', 'm'):
+        break
+      try:
+       skip=True
+       parts = seq[:-1].split(';')
+       if len(parts) >= 3:
+        button = int(parts[0])
+        mouse_x = int(parts[1]) - 1
+        mouse_y = int(parts[2]) - 1   
+        if seq[-1] == 'M':  # Mouse button pressed
+         if mouse_x < v.sizeX and mouse_y < v.sizeY:
+          v.loc = mouse_y*v.sizeX+mouse_x
+          if button in [0,2]:
+           if v.consoleState!=7: 
+            historyFunc(0)
+            v.consoleState=0
+          if button in [0,32]: 
+            v.map[mouse_y*v.sizeX+mouse_x] = v.selectColor
+          elif button in [2,34]: 
+           v.map[mouse_y*v.sizeX+mouse_x] = -1
+      except (ValueError, IndexError):
+       pass
+
+   except:
+    pass
+  elif key.isprintable():
+   if v.consoleState==1: v.console += key
+   else:
+    if key.lower() == 'a':
+     if v.loc%v.sizeX>0: v.loc= v.loc-1
+    elif key.lower() == 'd':
+     if v.loc%v.sizeX<v.sizeX-1: v.loc= v.loc+1
+    elif key.lower() == 'w':
+     if v.loc//v.sizeX>0: v.loc= v.loc-v.sizeX
+    elif key.lower() == 's':
+     if v.loc//v.sizeX<v.sizeY-1: v.loc= v.loc+v.sizeX
+    if key.lower() == 'z':
+     if v.history== len(v.mapHistory)-1:
+      historyFunc(0)
+     v.history= max(v.history-1,0)
+     historyFunc(1)
+    elif key.lower() == 'x':
+     v.history= min(v.history+1,len(v.mapHistory)-1)
+     historyFunc(1)
+    elif key== 'c':
+     commands(1)
+    elif key== 'C':
+     commands(1, 1)
+
+    elif key.lower()== 'v':
+     commands(2)
+
+    if key.lower() in ['a','w','s','d']:
+     if v.consoleState in [2,3,4]:
+      v.saveSelect = [y* v.sizeX+ x for y in range(min(v.selectLoc//v.sizeX, v.loc//v.sizeX), max(v.selectLoc//v.sizeX, v.loc//v.sizeX) + 1)
+      for x in range(min(v.selectLoc%v.sizeX, v.loc%v.sizeX), max(v.selectLoc%v.sizeX, v.loc%v.sizeX) + 1)]
+
+    if key.lower() in ['f','g','h','r','t','y']:
+     value= 1 if key.isupper() else 16
+     r = v.selectColor//(256*256)
+     g = (v.selectColor//256) % 256
+     b = v.selectColor % 256
+     if key.lower()=='f': r = max(0,(r - value))
+     elif key.lower()=='r': r = min((r + value),255)
+     elif key.lower()=='g': g = max(0,(g - value))
+     elif key.lower()=='t': g = min(255,(g + value))
+     elif key.lower()=='h': b = max(0,(b - value))
+     elif key.lower()=='y': b = min(255,(b + value))
+     v.selectColor = r * 256*256 + g * 256 + b
+  elif key in ['\x1b', '\x04']:  # Escape or Ctrl+C
+   v.running=2
+  if not skip:
+   v.buffer[v.xy[1]-1]= v.console[-v.xy[0]+1:] if v.consoleState==1 else "enter+ 'h'+ enter"
+
+def tick():
+ if v.consoleState == 7:
+  v.consoleState = 0
+  try:
+   out = subprocess.run([
+    'gdbus', 'call', '--session',
+    '--dest', 'org.gnome.Shell.Screenshot',
+    '--object-path', '/org/gnome/Shell/Screenshot',
+    '--method', 'org.gnome.Shell.Screenshot.PickColor'
+   ], capture_output=True, text=True).stdout
+   # output: ({'color': <(0.5, 0.3, 0.2)>},)
+   nums = out.split('(')[2].split(')')[0].split(',')
+   r = int(float(nums[0]) * 255)
+   g = int(float(nums[1]) * 255)
+   b = int(float(nums[2]) * 255)
+   v.selectColor = r * (256 * 256) + g * 256 + b
+  except Exception: pass
+
+sys.stdout.write('\x1b[?1003h\x1b[?1006h')
+disableControls()
+oldSettings = termios.tcgetattr(sys.stdin)
+tty.setcbreak(sys.stdin.fileno())
+
+while v.running!=2:
+ try:
+  ready, _, _ = select.select([sys.stdin], [], [], 0.01)
+  if ready:
+   onPress(sys.stdin.read(1))
+
+  tick()
+  graphics()
+  draw()
+  cursorVisible()
+  newDebug= v.debug if v.debug!=0 else ""
+  intToRgb= [v.selectColor//(256*256), v.selectColor//256 %256, v.selectColor%256]
+  print( f"\033]0;{"PAUSED" if v.running==1 else ""}{newDebug}{intToRgb}/{v.sizeX, v.sizeY}/paint\007", end='', flush=True)
+
+  newSize = os.get_terminal_size()
+  if v.xy!=[newSize.columns,newSize.lines]:
+   if [newSize.columns, newSize.lines]!=[0,0]:
+    v.xy=[newSize.columns, newSize.lines]
+    v.buffer=[""]* v.xy[1]
+    v.buffer[v.xy[1]-1]= "enter+ 'h'+ enter"
+    draw()
+
+ except Exception as e:
+  v.running=1
+  v.console=""
+  print( f"\033]0;PAUSED{newDebug}{intToRgb}/paint\007", end='', flush=True)
+  traceback.print_exc()
+
+termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldSettings)
+sys.stdout.write('\x1b[?1006l\x1b[?1003l')

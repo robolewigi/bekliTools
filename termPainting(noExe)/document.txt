@@ -1,5 +1,3 @@
-#!install
-in terminal at location command "./main"
 
 #!v1 feb 2026
 import sys
